@@ -1,0 +1,75 @@
+package chebyshev;
+
+import com.maxeler.maxcompiler.v2.kernelcompiler.Kernel;
+import com.maxeler.maxcompiler.v2.kernelcompiler.KernelParameters;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Count;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Count.Counter;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Count.WrapMode;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.CounterChain;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.core.Stream.OffsetExpr;
+import com.maxeler.maxcompiler.v2.kernelcompiler.stdlib.memory.Memory;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEType;
+import com.maxeler.maxcompiler.v2.kernelcompiler.types.base.DFEVar;
+import com.maxeler.maxcompiler.v2.utils.MathUtils;
+
+class ChebyshevKernel extends Kernel {
+
+	private static final DFEType type = dfeFloat(11, 53);
+
+	private static final int romSize = 256;
+
+	public ChebyshevKernel(KernelParameters parameters) {
+		super(parameters);
+
+		Memory<DFEVar> mappedRom = mem.alloc(type, romSize);
+		mappedRom.mapToCPU("mappedRom");
+
+		int addressBits = MathUtils.bitsToAddress(romSize);
+
+		OffsetExpr loopLength = stream.makeOffsetAutoLoop("loopLength");
+		DFEVar loopLengthVal = loopLength.getDFEVar(this, dfeUInt(32));
+
+		DFEVar m = io.scalarInput("m", dfeUInt(addressBits));
+		DFEVar xStreamSize = io.scalarInput("xStreamSize", dfeUInt(32));
+
+		DFEVar a = io.scalarInput("a", type);
+		DFEVar b = io.scalarInput("b", type);
+
+		CounterChain countChain = control.count.makeCounterChain();
+		DFEVar xSizeCounter = countChain.addCounter(xStreamSize, 1);
+		DFEVar mCounter = countChain.addCounter(m - 1, 1);
+		DFEVar loopCounter = countChain.addCounter(loopLengthVal, 1);
+
+		Count.Params params = control.count.makeParams(32)
+			.withEnable(mCounter.eq(0))
+			.withMax(xStreamSize)
+			.withWrapMode(WrapMode.STOP_AT_MAX);
+
+		Counter xStreamCounter = control.count.makeCounter(params);
+
+		DFEVar carriedY	  = type.newInstance(this);
+		DFEVar carriedD  = type.newInstance(this);
+		DFEVar carriedDd  = type.newInstance(this);
+
+		DFEVar y = mCounter.eq(0) ?
+				((io.input("x", type, mCounter.eq(0) & xStreamCounter.getCount() < xStreamSize) * 2.0 - a - b) / (b - a))
+				: carriedY;
+
+		DFEVar d = mCounter.eq(0) ? 0.0 : (2.0 * y * carriedD - carriedDd + mappedRom.read(mCounter));
+		DFEVar dd = mCounter.eq(0) ? 0.0 : carriedD;
+
+		carriedY   <== stream.offset(y, -loopLength);
+		carriedD  <== stream.offset(d, -loopLength);
+		carriedDd  <== stream.offset(dd, -loopLength);
+
+		y.simWatch("y");
+		d.simWatch("d");
+		dd.simWatch("dd");
+		loopLengthVal.simWatch("ll");
+
+		io.output("s", y * d - dd + 0.5 * mappedRom.read(m - 1) , type,
+				mCounter.eq(m - 2) & loopCounter < xStreamSize - xSizeCounter * loopLengthVal);
+	}
+
+
+}

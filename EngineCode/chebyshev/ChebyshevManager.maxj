@@ -1,0 +1,66 @@
+package chebyshev;
+
+import static com.maxeler.maxcompiler.v2.managers.standard.Manager.link;
+
+import com.maxeler.maxcompiler.v2.kernelcompiler.Kernel;
+import com.maxeler.maxcompiler.v2.managers.BuildConfig;
+import com.maxeler.maxcompiler.v2.managers.engine_interfaces.CPUTypes;
+import com.maxeler.maxcompiler.v2.managers.engine_interfaces.EngineInterface;
+import com.maxeler.maxcompiler.v2.managers.engine_interfaces.InterfaceParam;
+import com.maxeler.maxcompiler.v2.managers.standard.IOLink.IODestination;
+import com.maxeler.maxcompiler.v2.managers.standard.Manager;
+
+public class ChebyshevManager {
+
+	private static final String s_kernelName = "ChebyshevKernel";
+
+	public static void main(String[] args) {
+		ChebyshevEngineParameters params = new ChebyshevEngineParameters(args);
+		Manager manager = new Manager(params);
+		Kernel kernel   = new ChebyshevKernel(manager.makeKernelParameters(s_kernelName));
+		manager.setKernel(kernel);
+		manager.setIO(
+			link("x",   IODestination.CPU),
+			link("s", IODestination.CPU));
+
+		manager.createSLiCinterface(interfaceDefault());
+
+		configBuild(manager, params);
+
+		manager.build();
+	}
+
+	private static EngineInterface interfaceDefault() {
+		EngineInterface engine_interface = new EngineInterface();
+		CPUTypes   type = CPUTypes.DOUBLE;
+		int        size = type.sizeInBytes();
+
+		InterfaceParam  N    = engine_interface.addParam("N", CPUTypes.UINT32);
+		InterfaceParam  M    = engine_interface.addParam("M", CPUTypes.UINT32);
+		InterfaceParam  A    = engine_interface.addParam("A", CPUTypes.DOUBLE);
+		InterfaceParam  B    = engine_interface.addParam("B", CPUTypes.DOUBLE);
+
+		InterfaceParam loopLength = engine_interface.getAutoLoopOffset(s_kernelName, "loopLength");
+		engine_interface.ignoreAutoLoopOffset(s_kernelName, "loopLength");
+
+		engine_interface.setScalar(s_kernelName, "a", A);
+		engine_interface.setScalar(s_kernelName, "b", B);
+		engine_interface.setScalar(s_kernelName, "m", M);
+		engine_interface.setScalar(s_kernelName, "xStreamSize", N);
+
+		engine_interface.setTicks(s_kernelName, (M - 1) * loopLength * ((N - 1) / loopLength + 1));
+
+		engine_interface.setStream("x",   type, N * size);
+		engine_interface.setStream("s", type, N * size);
+
+		return engine_interface;
+	}
+
+	private static void configBuild(Manager manager, ChebyshevEngineParameters params) {
+		manager.setEnableStreamStatusBlocks(false);
+		BuildConfig buildConfig = manager.getBuildConfig();
+		buildConfig.setMPPRCostTableSearchRange(params.getMPPRStartCT(), params.getMPPREndCT());
+		buildConfig.setMPPRParallelism(params.getMPPRThreads());
+		buildConfig.setMPPRRetryNearMissesThreshold(params.getMPPRRetryThreshold());
+	}
+}
